@@ -13,6 +13,7 @@ Repeatable to ~0.01 mm.
 cd ~
 git clone https://github.com/zruncho3d/NozzleAlign.git
 cd NozzleAlign
+git checkout origin/xyonly
 ./install.sh
 ```
 
