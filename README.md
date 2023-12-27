@@ -8,9 +8,13 @@ Repeatable to ~0.01 mm.
 
 ## Klipper integration
 
-### Installing
-
-Copy the files in klipper folder to your ~/klipper folder on the Pi.
+#### Automatic installation
+```
+cd ~
+git clone https://github.com/zruncho3d/NozzleAlign.git
+cd NozzleAlign
+./install.sh
+```
 
 ### Configuration
 
