@@ -34,6 +34,8 @@ class ToolsCalibrate:
         self.sensor_location = None
         self.last_result = [0.,0.,0.]
         self.last_probe_offset = 0.
+        # !!!
+        self.clearance = 8.  # Amount to stter clear
 
         # Register commands
         self.gcode = self.printer.lookup_object('gcode')
@@ -50,37 +52,75 @@ class ToolsCalibrate:
         offset = direction_types[direction]
         start_pos = list(top_pos)
         start_pos[offset[0]] -= offset[1] * self.spread
-        toolhead.manual_move([None, None, top_pos[2]+self.lift_z], self.lift_speed)
+        #toolhead.manual_move([None, None, top_pos[2]+self.lift_z], self.lift_speed)
         toolhead.manual_move([start_pos[0], start_pos[1], None], self.travel_speed)
-        toolhead.manual_move([None, None, top_pos[2]-self.lower_z], self.lift_speed)
+        #toolhead.manual_move([None, None, top_pos[2]-self.lower_z], self.lift_speed)
         return self.probe_multi_axis.run_probe(direction, gcmd, samples = samples)[offset[0]]
 
     def calibrate_xy(self, toolhead, top_pos, gcmd, samples = None):
-        left_x = self.probe_xy(toolhead, top_pos, 'x+', gcmd, samples = samples)
-        right_x = self.probe_xy(toolhead, top_pos, 'x-', gcmd, samples = samples)
-        near_y = self.probe_xy(toolhead, top_pos, 'y+', gcmd, samples = samples)
-        far_y = self.probe_xy(toolhead, top_pos, 'y-', gcmd, samples = samples)
+        #logging.info("In calibrate_xy")
+        target_center = [top_pos[0] + self.clearance, top_pos[1] - self.clearance, 0]
+
+        # Go to left middle, assuming we start from lowest X, highest Y position, offset by clearance.
+        toolhead.manual_move([None, top_pos[1] - self.clearance, None], self.travel_speed)
+        left_x = self.probe_xy(toolhead, target_center, 'x+', gcmd, samples = samples)
+
+        # Back to left middle, up to far Y, move along Y, down to right middle
+        toolhead.manual_move([top_pos[0], None, None], self.travel_speed)
+        toolhead.manual_move([None, top_pos[1], None], self.travel_speed)
+        toolhead.manual_move([top_pos[0] + 2 * self.clearance, None, None], self.travel_speed)
+        toolhead.manual_move([None, top_pos[1] - self.clearance, None], self.travel_speed)
+        right_x = self.probe_xy(toolhead, target_center, 'x-', gcmd, samples = samples)
+
+        # Over to right middle, down to near Y right, over to near Y middle
+        toolhead.manual_move([top_pos[0] + 2 * self.clearance, None, None], self.travel_speed)
+        toolhead.manual_move([None, top_pos[1] - 2 * self.clearance, None], self.travel_speed)
+        toolhead.manual_move([top_pos[0] + self.clearance, None, None], self.travel_speed)
+        near_y = self.probe_xy(toolhead, target_center, 'y+', gcmd, samples = samples)
+
+        # Back to near Y middle, over to right, then to far Y, then to far middle Y
+        toolhead.manual_move([None, top_pos[1] - 2 * self.clearance, None], self.travel_speed)
+        toolhead.manual_move([top_pos[0] + 2 * self.clearance, None, None], self.travel_speed)
+        toolhead.manual_move([None, top_pos[1], None], self.travel_speed)
+        toolhead.manual_move([top_pos[0] + self.clearance, None, None], self.travel_speed)
+        far_y = self.probe_xy(toolhead, target_center, 'y-', gcmd, samples = samples)
+
+        # Return to start: far Y center, left Y far
+        toolhead.manual_move([None, top_pos[1], None], self.travel_speed)
+        toolhead.manual_move([top_pos[0], None, None], self.travel_speed)
+
         return [(left_x + right_x) / 2., (near_y + far_y) / 2.]
 
     def locate_sensor(self, gcmd):
+        #logging.info("In locate_sensor")
         toolhead = self.printer.lookup_object('toolhead')
         position = toolhead.get_position()
-        downPos = self.probe_multi_axis.run_probe("z-", gcmd, samples = 1)
-        center_x, center_y = self.calibrate_xy(toolhead, downPos, gcmd, samples = 1)
+        # !!! Issue below: will hit probe target        
+        #downPos = self.probe_multi_axis.run_probe("z-", gcmd, samples = 1)
+        #logging.info("downPos is  %.6f,%.6f,%.6f"
+        #                                % (downPos[0], downPos[1], downPos[2]))
+        center_x, center_y = self.calibrate_xy(toolhead, position, gcmd, samples = 1)
+        center_z = 0.
+        logging.info("first center is  %.6f,%.6f,%.6f"
+                                        % (center_x, center_y, center_z))
+        #toolhead.manual_move([None, None, downPos[2]+self.lift_z], self.lift_speed)
 
-        toolhead.manual_move([None, None, downPos[2]+self.lift_z], self.lift_speed)
-        toolhead.manual_move([center_x, center_y, None], self.travel_speed)
-        center_z = self.probe_multi_axis.run_probe("z-", gcmd, speed_ratio=0.5)[2]
+        new_start_pos = [center_x - self.clearance, center_y + self.clearance, center_z]
+        toolhead.manual_move(new_start_pos, self.travel_speed)
+        # !!! Issue below: will hit probe target
+        #toolhead.manual_move([center_x, center_y, None], self.travel_speed)
+        #center_z = self.probe_multi_axis.run_probe("z-", gcmd, speed_ratio=0.5)[2]
         # Now redo X and Y, since we have a more accurate center.
-        center_x, center_y = self.calibrate_xy(toolhead, [center_x, center_y, center_z], gcmd)
-
+        center_x, center_y = self.calibrate_xy(toolhead, new_start_pos, gcmd)
+        logging.info("second center is  %.6f,%.6f,%.6f"
+                                        % (center_x, center_y, center_z))
         # rest above center
-        position[0] = center_x
-        position[1] = center_y
-        position[2] = center_z+self.final_lift_z
-        toolhead.manual_move([None, None, position[2]], self.lift_speed)
-        toolhead.manual_move([position[0], position[1], None], self.travel_speed)
-        toolhead.set_position(position)
+        #position[0] = center_x
+        #position[1] = center_y
+        #position[2] = center_z+self.final_lift_z
+        #toolhead.manual_move([None, None, position[2]], self.lift_speed)
+        #toolhead.manual_move([position[0], position[1], None], self.travel_speed)
+        #toolhead.set_position(position)
         return [center_x, center_y, center_z]
 
     cmd_TOOL_LOCATE_SENSOR_help = ("Locate the tool calibration sensor, "
